@@ -70,81 +70,89 @@ http.createServer(function(req, res) {
       res.writeHead(404, cors);
       return res.end();
     }
+    var projectTitle = id;
+    request('https://scratch.mit.edu/api/v1/project/' + id + '/?format=json', {encoding: null}, function(t_err, t_r, t_body){
+      if(!t_err){
+        try {
+          projectTitle = JSON.parse(t_body).title;
+        } catch(e){}
+      }
 
-    var headers = copy(cors, {
-      'Content-Type': zip ? 'application/zip' : json ? 'application/json' : txt ? 'text/plain' : 'application/octet-stream',
-      'Content-Disposition': 'attachment;filename=' + id + '.' + ext
-    });
-
-    try {
-      var project = JSON.parse(body);
-    } catch (e) {
-      if (!txt && !json) {
-        res.writeHead(200, headers);
+      var headers = copy(cors, {
+        'Content-Type': zip ? 'application/zip' : json ? 'application/json' : txt ? 'text/plain' : 'application/octet-stream',
+        'Content-Disposition': 'attachment;filename=' + projectTitle + '.' + ext
+      });
+  
+      try {
+        var project = JSON.parse(body);
+      } catch (e) {
+        if (!txt && !json) {
+          res.writeHead(200, headers);
+          return res.end(body);
+        }
+        resumer().queue(body).end().pipe(unzip.Parse()).on('entry', function(entry) {
+          if (!/\.json$/.test(entry.path)) return;
+          collect(entry, function(err, body2) {
+            if (err) {
+              res.writeHead(500, cors);
+              return res.end();
+            }
+            if (json) {
+              res.writeHead(200, headers);
+              return res.end(body2);
+            }
+            try {
+              var project = JSON.parse(body2);
+            } catch (e) {
+              res.writeHead(500, cors);
+              return res.end();
+            }
+            res.writeHead(200, headers);
+            summarize(res).project(project);
+            res.end();
+          });
+        });
+        return;
+      }
+  
+      res.writeHead(200, headers);
+  
+      if (txt) {
+        summarize(res).project(project);
+        return res.end();
+      }
+      if (json) {
         return res.end(body);
       }
-      resumer().queue(body).end().pipe(unzip.Parse()).on('entry', function(entry) {
-        if (!/\.json$/.test(entry.path)) return;
-        collect(entry, function(err, body2) {
-          if (err) {
-            res.writeHead(500, cors);
-            return res.end();
-          }
-          if (json) {
-            res.writeHead(200, headers);
-            return res.end(body2);
-          }
-          try {
-            var project = JSON.parse(body2);
-          } catch (e) {
-            res.writeHead(500, cors);
-            return res.end();
-          }
-          res.writeHead(200, headers);
-          summarize(res).project(project);
-          res.end();
+  
+      var nextID = 0;
+  
+      function parse(thing) {
+        if (thing.costumes) thing.costumes.forEach(function(costume) {
+          addResource(costume, 'baseLayerID', costume.baseLayerMD5);
+          addResource(costume, 'textLayerID', costume.textLayerMD5);
         });
+        if (thing.sounds) thing.sounds.forEach(function(sound) {
+          addResource(sound, 'soundID', sound.md5);
+        });
+        if (thing.children) thing.children.forEach(parse);
+      }
+  
+      function addResource(thing, id, md5) {
+        if (!md5) return;
+        thing[id] = ++nextID;
+        archive.append(request('http://cdn.assets.scratch.mit.edu/internalapi/asset/' + md5 + '/get/'), { name: nextID + '.' + md5.split('.').pop() });
+      }
+  
+      var archive = archiver('zip');
+      archive.pipe(res);
+  
+      parse(project);
+  
+      archive.append(body, { name: 'project.json' });
+      archive.finalize(function() {
+        res.end();
       });
-      return;
-    }
-
-    res.writeHead(200, headers);
-
-    if (txt) {
-      summarize(res).project(project);
-      return res.end();
-    }
-    if (json) {
-      return res.end(body);
-    }
-
-    var nextID = 0;
-
-    function parse(thing) {
-      if (thing.costumes) thing.costumes.forEach(function(costume) {
-        addResource(costume, 'baseLayerID', costume.baseLayerMD5);
-        addResource(costume, 'textLayerID', costume.textLayerMD5);
-      });
-      if (thing.sounds) thing.sounds.forEach(function(sound) {
-        addResource(sound, 'soundID', sound.md5);
-      });
-      if (thing.children) thing.children.forEach(parse);
-    }
-
-    function addResource(thing, id, md5) {
-      if (!md5) return;
-      thing[id] = ++nextID;
-      archive.append(request('http://cdn.assets.scratch.mit.edu/internalapi/asset/' + md5 + '/get/'), { name: nextID + '.' + md5.split('.').pop() });
-    }
-
-    var archive = archiver('zip');
-    archive.pipe(res);
-
-    parse(project);
-
-    archive.append(body, { name: 'project.json' });
-    archive.finalize(function() {
-      res.end();
     });
   });
 
